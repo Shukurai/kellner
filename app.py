@@ -247,13 +247,10 @@ with tab_new:
             st.session_state.cart = []
 
         st.subheader("Добавить блюдо")
-        category = st.selectbox("Категория", menu_df["category"].unique())
-        cat_items = menu_df[menu_df["category"] == category]
-
         cols = st.columns([3, 2, 1, 1])
         with cols[0]:
-            item = st.selectbox("Блюдо", cat_items["name"])
-        item_row = cat_items[cat_items["name"] == item].iloc[0]
+            item = st.selectbox("Блюдо (можно начать печатать)", menu_df["name"].sort_values())
+        item_row = menu_df[menu_df["name"] == item].iloc[0]
         with cols[1]:
             price = float(item_row["price"])
             st.metric("Цена", f"{price:.2f} €")
