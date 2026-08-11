@@ -25,7 +25,8 @@ def init_db():
             name TEXT NOT NULL,
             price REAL NOT NULL,
             category TEXT DEFAULT 'Прочее',
-            image_path TEXT
+            image_path TEXT,
+            custom_price INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS tables (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,6 +55,13 @@ def init_db():
     existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(order_items)")}
     if "note" not in existing_cols:
         conn.execute("ALTER TABLE order_items ADD COLUMN note TEXT")
+        conn.commit()
+
+    menu_cols = {row[1] for row in conn.execute("PRAGMA table_info(menu)")}
+    if "custom_price" not in menu_cols:
+        conn.execute(
+            "ALTER TABLE menu ADD COLUMN custom_price INTEGER NOT NULL DEFAULT 0"
+        )
         conn.commit()
 
     if conn.execute("SELECT COUNT(*) FROM menu").fetchone()[0] == 0:
@@ -215,6 +223,13 @@ def init_db():
             "INSERT INTO menu (name, price, category) VALUES (?, ?, ?)", seed
         )
         conn.commit()
+
+    if conn.execute("SELECT COUNT(*) FROM menu WHERE name = 'Eis'").fetchone()[0] == 0:
+        conn.execute(
+            "INSERT INTO menu (name, price, category, custom_price) "
+            "VALUES ('Eis', 0.0, 'Nachspeisen', 1)"
+        )
+        conn.commit()
     conn.close()
 
 
@@ -270,8 +285,14 @@ with tab_new:
         with row_add:
             item = st.selectbox("Блюдо", matches["name"].sort_values(), width=280)
             item_row = menu_df[menu_df["name"] == item].iloc[0]
-            price = float(item_row["price"])
-            st.write(f"**{price:.2f} €**")
+            if item_row["custom_price"]:
+                price = st.number_input(
+                    "Цена, €", min_value=0.0, step=0.5,
+                    value=float(item_row["price"]), key="manual_price",
+                )
+            else:
+                price = float(item_row["price"])
+                st.write(f"**{price:.2f} €**")
             add_clicked = st.button("➕ Добавить")
 
         note = ""
@@ -451,6 +472,14 @@ with tab_open:
                         "Блюдо", add_matches["name"].sort_values(), key=f"add_item_{oid}"
                     )
                     add_row = menu_df[menu_df["name"] == add_item].iloc[0]
+                    if add_row["custom_price"]:
+                        add_price = st.number_input(
+                            "Цена, €", min_value=0.0, step=0.5,
+                            value=float(add_row["price"]), key=f"add_price_{oid}",
+                        )
+                    else:
+                        add_price = float(add_row["price"])
+                        st.write(f"{add_price:.2f} €")
                     add_qty = st.number_input(
                         "Кол-во", min_value=1, step=1, value=1, key=f"add_qty_{oid}"
                     )
@@ -463,7 +492,7 @@ with tab_open:
                             (
                                 oid,
                                 add_item,
-                                float(add_row["price"]),
+                                add_price,
                                 add_qty,
                                 add_note or None,
                             ),
@@ -559,13 +588,24 @@ with tab_menu:
                     if row["image_path"] and os.path.exists(row["image_path"]):
                         st.image(row["image_path"], width=80)
                 with c2:
-                    st.write(f"**{row['name']}** — {row['price']:.2f} €")
+                    price_label = (
+                        "цена уточняется у официанта"
+                        if row["custom_price"]
+                        else f"{row['price']:.2f} €"
+                    )
+                    st.write(f"**{row['name']}** — {price_label}")
 
     st.divider()
     with st.form("add_menu_item"):
         st.subheader("Добавить блюдо в меню")
         name = st.text_input("Название")
-        price = st.number_input("Цена, €", min_value=0.0, step=0.5)
+        custom = st.checkbox(
+            "Цену каждый раз вводит официант (например, мороженое на развес)"
+        )
+        price = st.number_input(
+            "Цена, €" if not custom else "Цена по умолчанию, €",
+            min_value=0.0, step=0.5,
+        )
         category = st.text_input("Категория", value="Прочее")
         uploaded = st.file_uploader(
             "Фото блюда (необязательно)", type=["png", "jpg", "jpeg"]
@@ -578,8 +618,9 @@ with tab_menu:
                 with open(image_path, "wb") as f:
                     f.write(uploaded.getbuffer())
             conn.execute(
-                "INSERT INTO menu (name, price, category, image_path) VALUES (?, ?, ?, ?)",
-                (name, price, category, image_path),
+                "INSERT INTO menu (name, price, category, image_path, custom_price) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (name, price, category, image_path, int(custom)),
             )
             conn.commit()
             st.rerun()
