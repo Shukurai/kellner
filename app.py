@@ -43,11 +43,18 @@ def init_db():
             order_id INTEGER NOT NULL REFERENCES orders(id),
             item_name TEXT NOT NULL,
             price REAL NOT NULL,
-            quantity INTEGER NOT NULL
+            quantity INTEGER NOT NULL,
+            note TEXT
         );
         """
     )
     conn.commit()
+
+    # лёгкая миграция: добираем колонки, которых не было в старой БД
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(order_items)")}
+    if "note" not in existing_cols:
+        conn.execute("ALTER TABLE order_items ADD COLUMN note TEXT")
+        conn.commit()
 
     if conn.execute("SELECT COUNT(*) FROM menu").fetchone()[0] == 0:
         seed = [
@@ -216,7 +223,7 @@ os.makedirs(IMAGES_DIR, exist_ok=True)
 st.set_page_config(page_title="Официант", layout="wide")
 
 tab_new, tab_open, tab_stats, tab_menu = st.tabs(
-    ["🆕 Новый заказ", "📋 Открытые заказы", "📊 Аналитика", "🍽 Меню"]
+    ["🆕 Новый заказ", "📋 Заказы", "📊 Аналитика", "🍽 Меню"]
 )
 
 # ---------- Новый заказ ----------
@@ -247,9 +254,21 @@ with tab_new:
             st.session_state.cart = []
 
         st.subheader("Добавить блюдо")
+        search_query = st.text_input(
+            "🔍 Поиск", placeholder="начни печатать название...", key="item_search"
+        )
+        matches = menu_df
+        if search_query:
+            matches = menu_df[
+                menu_df["name"].str.contains(search_query, case=False, na=False)
+            ]
+            if matches.empty:
+                st.warning("Ничего не найдено")
+                matches = menu_df
+
         cols = st.columns([3, 2, 1, 1])
         with cols[0]:
-            item = st.selectbox("Блюдо (можно начать печатать)", menu_df["name"].sort_values())
+            item = st.selectbox("Блюдо", matches["name"].sort_values())
         item_row = menu_df[menu_df["name"] == item].iloc[0]
         with cols[1]:
             price = float(item_row["price"])
@@ -259,20 +278,60 @@ with tab_new:
         with cols[3]:
             st.write("")
             st.write("")
-            if st.button("➕ Добавить"):
-                st.session_state.cart.append(
-                    {"item_name": item, "price": price, "quantity": qty}
-                )
+            add_clicked = st.button("➕ Добавить")
+
+        note = ""
+        if item_row["category"] == "Frühstück":
+            note = st.selectbox(
+                "Кофе/чай к завтраку",
+                ["Melange", "Verlängerter", "Espresso", "Tee", "Heiße Schokolade"],
+                key="breakfast_drink",
+            )
+        extra_note = st.text_input(
+            "Уточнение (необязательно) — напр. без сахара, отдельно", key="extra_note"
+        )
+        if extra_note:
+            note = f"{note}, {extra_note}" if note else extra_note
+
+        if add_clicked:
+            st.session_state.cart.append(
+                {"item_name": item, "price": price, "quantity": qty, "note": note}
+            )
 
         if item_row["image_path"] and os.path.exists(item_row["image_path"]):
             st.image(item_row["image_path"], width=200, caption=item)
 
         if st.session_state.cart:
             st.subheader("Текущий заказ")
-            cart_df = pd.DataFrame(st.session_state.cart)
-            cart_df["Сумма"] = cart_df["price"] * cart_df["quantity"]
-            st.dataframe(cart_df, width="stretch", hide_index=True)
-            st.write(f"**Итого: {cart_df['Сумма'].sum():.2f} €**")
+            remove_idx = None
+            total = 0.0
+            for idx, row in enumerate(st.session_state.cart):
+                c1, c2, c3, c4 = st.columns([3, 1.3, 1, 0.6])
+                with c1:
+                    label = row["item_name"]
+                    if row.get("note"):
+                        label += f"  \n:gray[_{row['note']}_]"
+                    st.markdown(label)
+                with c2:
+                    new_qty = st.number_input(
+                        "Кол-во",
+                        min_value=1,
+                        step=1,
+                        value=row["quantity"],
+                        key=f"cart_qty_{idx}",
+                        label_visibility="collapsed",
+                    )
+                    st.session_state.cart[idx]["quantity"] = new_qty
+                with c3:
+                    st.write(f"{row['price'] * new_qty:.2f} €")
+                with c4:
+                    if st.button("✖", key=f"cart_del_{idx}"):
+                        remove_idx = idx
+                total += row["price"] * new_qty
+            if remove_idx is not None:
+                st.session_state.cart.pop(remove_idx)
+                st.rerun()
+            st.write(f"**Итого: {total:.2f} €**")
 
             col_a, col_b = st.columns(2)
             with col_a:
@@ -284,9 +343,16 @@ with tab_new:
                     order_id = cur.lastrowid
                     for row in st.session_state.cart:
                         cur.execute(
-                            "INSERT INTO order_items (order_id, item_name, price, quantity) "
-                            "VALUES (?, ?, ?, ?)",
-                            (order_id, row["item_name"], row["price"], row["quantity"]),
+                            "INSERT INTO order_items "
+                            "(order_id, item_name, price, quantity, note) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                order_id,
+                                row["item_name"],
+                                row["price"],
+                                row["quantity"],
+                                row.get("note") or None,
+                            ),
                         )
                     conn.commit()
                     st.session_state.cart = []
@@ -298,35 +364,142 @@ with tab_new:
                     st.rerun()
     conn.close()
 
-# ---------- Открытые заказы ----------
+# ---------- Заказы ----------
 with tab_open:
     conn = get_conn()
-    open_orders = pd.read_sql(
-        "SELECT id, table_name, created_at FROM orders "
-        "WHERE status = 'открыт' ORDER BY created_at",
+    menu_df = pd.read_sql("SELECT * FROM menu ORDER BY category, name", conn)
+
+    status_choice = st.radio("Статус", ["Открытые", "Оплаченные"], horizontal=True)
+    status_value = "открыт" if status_choice == "Открытые" else "оплачен"
+
+    orders_df = pd.read_sql(
+        "SELECT id, table_name, created_at FROM orders WHERE status = ? "
+        "ORDER BY created_at DESC",
         conn,
+        params=(status_value,),
     )
-    if open_orders.empty:
-        st.info("Нет открытых заказов")
-    for _, order in open_orders.iterrows():
+    if orders_df.empty:
+        st.info("Заказов нет")
+
+    for _, order in orders_df.iterrows():
+        oid = int(order["id"])
         with st.expander(
-            f"Столик «{order['table_name']}» — заказ №{order['id']} ({order['created_at']})"
+            f"Столик «{order['table_name']}» — заказ №{oid} ({order['created_at']})"
         ):
             items = pd.read_sql(
-                "SELECT item_name, price, quantity FROM order_items WHERE order_id = ?",
+                "SELECT id, item_name, price, quantity, note FROM order_items "
+                "WHERE order_id = ?",
                 conn,
-                params=(int(order["id"]),),
+                params=(oid,),
             )
-            items["Сумма"] = items["price"] * items["quantity"]
-            st.dataframe(items, width="stretch", hide_index=True)
-            st.write(f"**Итого: {items['Сумма'].sum():.2f} €**")
-            if st.button("💰 Закрыть и оплатить", key=f"close_{order['id']}"):
-                conn.execute(
-                    "UPDATE orders SET status = 'оплачен', closed_at = ? WHERE id = ?",
-                    (datetime.now().isoformat(), int(order["id"])),
-                )
-                conn.commit()
-                st.rerun()
+            total = 0.0
+
+            if status_value == "открыт":
+                del_item_id = None
+                for _, it in items.iterrows():
+                    c1, c2, c3, c4 = st.columns([3, 1.3, 1, 0.6])
+                    with c1:
+                        label = it["item_name"]
+                        if it["note"]:
+                            label += f"  \n:gray[_{it['note']}_]"
+                        st.markdown(label)
+                    with c2:
+                        new_qty = st.number_input(
+                            "Кол-во",
+                            min_value=1,
+                            step=1,
+                            value=int(it["quantity"]),
+                            key=f"open_qty_{it['id']}",
+                            label_visibility="collapsed",
+                        )
+                        if new_qty != it["quantity"]:
+                            conn.execute(
+                                "UPDATE order_items SET quantity = ? WHERE id = ?",
+                                (new_qty, int(it["id"])),
+                            )
+                            conn.commit()
+                            st.rerun()
+                    with c3:
+                        st.write(f"{it['price'] * new_qty:.2f} €")
+                    with c4:
+                        if st.button("✖", key=f"open_del_{it['id']}"):
+                            del_item_id = int(it["id"])
+                    total += it["price"] * new_qty
+                if del_item_id is not None:
+                    conn.execute(
+                        "DELETE FROM order_items WHERE id = ?", (del_item_id,)
+                    )
+                    conn.commit()
+                    st.rerun()
+                st.write(f"**Итого: {total:.2f} €**")
+
+                with st.expander("➕ Добавить позицию в этот заказ"):
+                    add_q = st.text_input("Поиск", key=f"add_search_{oid}")
+                    add_matches = menu_df
+                    if add_q:
+                        add_matches = menu_df[
+                            menu_df["name"].str.contains(add_q, case=False, na=False)
+                        ]
+                        if add_matches.empty:
+                            add_matches = menu_df
+                    add_item = st.selectbox(
+                        "Блюдо", add_matches["name"].sort_values(), key=f"add_item_{oid}"
+                    )
+                    add_row = menu_df[menu_df["name"] == add_item].iloc[0]
+                    add_qty = st.number_input(
+                        "Кол-во", min_value=1, step=1, value=1, key=f"add_qty_{oid}"
+                    )
+                    add_note = st.text_input("Уточнение", key=f"add_note_{oid}")
+                    if st.button("Добавить в заказ", key=f"add_btn_{oid}"):
+                        conn.execute(
+                            "INSERT INTO order_items "
+                            "(order_id, item_name, price, quantity, note) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            (
+                                oid,
+                                add_item,
+                                float(add_row["price"]),
+                                add_qty,
+                                add_note or None,
+                            ),
+                        )
+                        conn.commit()
+                        st.rerun()
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("💰 Закрыть и оплатить", key=f"close_{oid}"):
+                        conn.execute(
+                            "UPDATE orders SET status = 'оплачен', closed_at = ? "
+                            "WHERE id = ?",
+                            (datetime.now().isoformat(), oid),
+                        )
+                        conn.commit()
+                        st.rerun()
+                with col_b:
+                    if st.button("🗑 Удалить заказ", key=f"delorder_{oid}"):
+                        conn.execute(
+                            "DELETE FROM order_items WHERE order_id = ?", (oid,)
+                        )
+                        conn.execute("DELETE FROM orders WHERE id = ?", (oid,))
+                        conn.commit()
+                        st.rerun()
+
+            else:
+                for _, it in items.iterrows():
+                    label = f"{it['item_name']} × {it['quantity']}"
+                    if it["note"]:
+                        label += f"  \n:gray[_{it['note']}_]"
+                    st.markdown(label)
+                    total += it["price"] * it["quantity"]
+                st.write(f"**Итого: {total:.2f} €**")
+                if st.button("🗑 Удалить заказ", key=f"delpaid_{oid}"):
+                    conn.execute(
+                        "DELETE FROM order_items WHERE order_id = ?", (oid,)
+                    )
+                    conn.execute("DELETE FROM orders WHERE id = ?", (oid,))
+                    conn.commit()
+                    st.rerun()
     conn.close()
 
 # ---------- Аналитика ----------
