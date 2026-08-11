@@ -1,0 +1,5 @@
+orders.db
+menu_images/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
