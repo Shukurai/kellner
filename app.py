@@ -264,6 +264,15 @@ def init_db():
             "VALUES ('Eis', 0.0, 'Nachspeisen', 1)"
         )
         conn.commit()
+
+    if conn.execute(
+        "SELECT COUNT(*) FROM menu WHERE name = 'Getränk'"
+    ).fetchone()[0] == 0:
+        conn.execute(
+            "INSERT INTO menu (name, price, category, custom_price) "
+            "VALUES ('Getränk', 0.0, 'Alkoholfreie Getränke', 1)"
+        )
+        conn.commit()
     conn.close()
 
 
