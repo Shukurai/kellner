@@ -1,3 +1,4 @@
+import difflib
 import os
 import sqlite3
 import uuid
@@ -8,6 +9,40 @@ import streamlit as st
 
 DB_PATH = "orders.db"
 IMAGES_DIR = "menu_images"
+
+_UMLAUT_MAP = str.maketrans(
+    {"ü": "u", "ä": "a", "ö": "o", "ß": "ss", "é": "e", "è": "e"}
+)
+
+
+def _normalize(text: str) -> str:
+    return text.lower().translate(_UMLAUT_MAP)
+
+
+def search_menu(query: str, menu_df: pd.DataFrame) -> pd.DataFrame:
+    """Ищет блюда по подстроке (без учёта умлаутов/регистра), а если ничего
+    не нашлось — пробует нечёткий поиск на случай опечатки в одну букву."""
+    if not query:
+        return menu_df
+
+    q_norm = _normalize(query)
+    names_norm = menu_df["name"].map(_normalize)
+
+    exact_mask = names_norm.str.contains(q_norm, regex=False)
+    if exact_mask.any():
+        return menu_df[exact_mask]
+
+    def best_ratio(name_norm: str) -> float:
+        tokens = name_norm.replace("/", " ").replace(",", " ").replace("-", " ").split()
+        tokens.append(name_norm)
+        return max(difflib.SequenceMatcher(None, q_norm, t).ratio() for t in tokens)
+
+    ratios = names_norm.map(best_ratio)
+    fuzzy_mask = ratios >= 0.72
+    if fuzzy_mask.any():
+        return menu_df[fuzzy_mask].loc[ratios[fuzzy_mask].sort_values(ascending=False).index]
+
+    return menu_df.iloc[0:0]
 
 
 def get_conn():
@@ -274,9 +309,7 @@ with tab_new:
         )
         matches = menu_df
         if search_query:
-            matches = menu_df[
-                menu_df["name"].str.contains(search_query, case=False, na=False)
-            ]
+            matches = search_menu(search_query, menu_df)
             if matches.empty:
                 st.warning("Ничего не найдено")
                 matches = menu_df
@@ -469,9 +502,7 @@ with tab_open:
                     add_q = st.text_input("Поиск", key=f"add_search_{oid}")
                     add_matches = menu_df
                     if add_q:
-                        add_matches = menu_df[
-                            menu_df["name"].str.contains(add_q, case=False, na=False)
-                        ]
+                        add_matches = search_menu(add_q, menu_df)
                         if add_matches.empty:
                             add_matches = menu_df
                     add_item = st.selectbox(
