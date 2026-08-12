@@ -249,12 +249,13 @@ with tab_new:
     with st.expander("➕ Добавить новый столик", expanded=tables_df.empty):
         new_table_name = st.text_input("Название столика", key="new_table_input")
         if st.button("Добавить столик"):
-            if new_table_name.strip():
+            clean_name = new_table_name.strip()
+            if clean_name:
                 conn.execute(
-                    "INSERT OR IGNORE INTO tables (name) VALUES (?)",
-                    (new_table_name.strip(),),
+                    "INSERT OR IGNORE INTO tables (name) VALUES (?)", (clean_name,)
                 )
                 conn.commit()
+                st.session_state["table_select"] = clean_name
                 st.rerun()
             else:
                 st.warning("Введи название столика")
@@ -262,7 +263,7 @@ with tab_new:
     if tables_df.empty:
         st.info("Сначала добавь хотя бы один столик выше")
     else:
-        table_name = st.selectbox("Столик", tables_df["name"])
+        table_name = st.selectbox("Столик", tables_df["name"], key="table_select")
 
         if "cart" not in st.session_state:
             st.session_state.cart = []
