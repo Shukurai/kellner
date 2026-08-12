@@ -12,7 +12,6 @@ IMAGES_DIR = "menu_images"
 
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
@@ -400,9 +399,15 @@ with tab_open:
 
     for _, order in orders_df.iterrows():
         oid = int(order["id"])
-        with st.expander(
-            f"Столик «{order['table_name']}» — заказ №{oid} ({order['created_at']})"
-        ):
+        with st.expander(order["table_name"]):
+            details_key = f"show_details_{oid}"
+            if details_key not in st.session_state:
+                st.session_state[details_key] = False
+            if st.button("ℹ️ Детали", key=f"details_btn_{oid}"):
+                st.session_state[details_key] = not st.session_state[details_key]
+            if st.session_state[details_key]:
+                st.caption(f"Заказ №{oid} · {order['created_at']}")
+
             items = pd.read_sql(
                 "SELECT id, item_name, price, quantity, note FROM order_items "
                 "WHERE order_id = ?",
@@ -508,6 +513,16 @@ with tab_open:
                             "WHERE id = ?",
                             (datetime.now().isoformat(), oid),
                         )
+                        still_open = conn.execute(
+                            "SELECT COUNT(*) FROM orders "
+                            "WHERE table_name = ? AND status = 'открыт'",
+                            (order["table_name"],),
+                        ).fetchone()[0]
+                        if still_open == 0:
+                            conn.execute(
+                                "DELETE FROM tables WHERE name = ?",
+                                (order["table_name"],),
+                            )
                         conn.commit()
                         st.rerun()
                 with col_b:
