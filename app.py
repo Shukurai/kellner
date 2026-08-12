@@ -354,9 +354,7 @@ with tab_new:
                 color = cat_color[top_items.loc[i, "category"]]
                 css_rules.append(
                     f".st-key-quick_{i} button {{"
-                    f"background-color:{color} !important;"
-                    f"border-color:{color} !important;"
-                    f"color:white !important;"
+                    f"border:2px solid {color} !important;"
                     f"padding:0.1rem 0.5rem !important;"
                     f"font-size:0.75rem !important;"
                     f"min-height:1.7rem !important;"
