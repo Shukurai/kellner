@@ -334,14 +334,42 @@ with tab_new:
             conn,
         )
         if not top_items.empty:
+            # группируем рядом по категории (внутри — по популярности)
+            top_items = top_items.sort_values(
+                ["category", "cnt"], ascending=[True, False]
+            ).reset_index(drop=True)
+
+            palette = [
+                "#e76f51", "#2a9d8f", "#e9c46a", "#457b9d",
+                "#8ab17d", "#c9184a", "#577590", "#f4a261",
+            ]
+            categories_here = top_items["category"].unique().tolist()
+            cat_color = {
+                cat: palette[i % len(palette)]
+                for i, cat in enumerate(categories_here)
+            }
+
+            css_rules = []
+            for i in range(len(top_items)):
+                color = cat_color[top_items.loc[i, "category"]]
+                css_rules.append(
+                    f".st-key-quick_{i} button {{"
+                    f"background-color:{color} !important;"
+                    f"border-color:{color} !important;"
+                    f"color:white !important;"
+                    f"padding:0.1rem 0.5rem !important;"
+                    f"font-size:0.75rem !important;"
+                    f"min-height:1.7rem !important;"
+                    f"line-height:1.1 !important;"
+                    f"}}"
+                )
+            st.markdown(f"<style>{''.join(css_rules)}</style>", unsafe_allow_html=True)
+
             st.caption("⚡ Часто заказывают")
             quick_row = st.container(horizontal=True, gap="small")
             with quick_row:
-                for _, ti in top_items.iterrows():
-                    if st.button(
-                        f"{ti['item_name']} · {ti['price']:.2f}€",
-                        key=f"quick_{ti['item_name']}",
-                    ):
+                for i, ti in top_items.iterrows():
+                    if st.button(ti["item_name"], key=f"quick_{i}"):
                         quick_note = (
                             "Melange" if ti["category"] == "Frühstück" else ""
                         )
