@@ -300,10 +300,52 @@ with tab_new:
     else:
         table_name = st.selectbox("Столик", tables_df["name"], key="table_select")
 
+        existing_total = conn.execute(
+            "SELECT COALESCE(SUM(oi.price * oi.quantity), 0) "
+            "FROM orders o JOIN order_items oi ON oi.order_id = o.id "
+            "WHERE o.table_name = ? AND o.status = 'открыт'",
+            (table_name,),
+        ).fetchone()[0]
+        if existing_total > 0:
+            st.info(f"На «{table_name}» уже открыто на {existing_total:.2f} €")
+
         if "cart" not in st.session_state:
             st.session_state.cart = []
 
         st.subheader("Добавить блюдо")
+
+        top_items = pd.read_sql(
+            "SELECT oi.item_name, m.price, m.category, m.custom_price, "
+            "SUM(oi.quantity) AS cnt "
+            "FROM order_items oi "
+            "JOIN menu m ON m.name = oi.item_name "
+            "WHERE m.custom_price = 0 "
+            "GROUP BY oi.item_name "
+            "ORDER BY cnt DESC LIMIT 6",
+            conn,
+        )
+        if not top_items.empty:
+            st.caption("⚡ Часто заказывают")
+            quick_row = st.container(horizontal=True, gap="small")
+            with quick_row:
+                for _, ti in top_items.iterrows():
+                    if st.button(
+                        f"{ti['item_name']} · {ti['price']:.2f}€",
+                        key=f"quick_{ti['item_name']}",
+                    ):
+                        quick_note = (
+                            "Melange" if ti["category"] == "Frühstück" else ""
+                        )
+                        st.session_state.cart.append(
+                            {
+                                "item_name": ti["item_name"],
+                                "price": float(ti["price"]),
+                                "quantity": 1,
+                                "note": quick_note,
+                            }
+                        )
+                        st.rerun()
+
         search_query = st.text_input(
             "🔍 Поиск", placeholder="начни печатать название...", key="item_search"
         )
@@ -381,7 +423,12 @@ with tab_new:
                     st.session_state.cart.pop(idx)
                     st.rerun()
                 total += row["price"] * row["quantity"]
-            st.write(f"**Итого: {total:.2f} €**")
+            st.write(f"**Итого нового: {total:.2f} €**")
+            if existing_total > 0:
+                st.write(
+                    f"Всего по столику: **{total + existing_total:.2f} €** "
+                    f"(уже было {existing_total:.2f} €)"
+                )
 
             col_a, col_b = st.columns(2)
             with col_a:
