@@ -373,9 +373,9 @@ with tab_new:
                 css_rules.append(
                     f".st-key-quick_{i} button {{"
                     f"border:2px solid {color} !important;"
-                    f"padding:0.1rem 0.5rem !important;"
-                    f"font-size:0.75rem !important;"
-                    f"min-height:1.7rem !important;"
+                    f"padding:0.35rem 0.7rem !important;"
+                    f"font-size:0.82rem !important;"
+                    f"min-height:2.4rem !important;"
                     f"line-height:1.1 !important;"
                     f"}}"
                 )
@@ -527,8 +527,11 @@ with tab_open:
     status_value = "открыт" if status_choice == "Открытые" else "оплачен"
 
     orders_df = pd.read_sql(
-        "SELECT id, table_name, created_at FROM orders WHERE status = ? "
-        "ORDER BY created_at DESC",
+        "SELECT o.id, o.table_name, o.created_at, "
+        "COALESCE(SUM(oi.price * oi.quantity), 0) AS total "
+        "FROM orders o LEFT JOIN order_items oi ON oi.order_id = o.id "
+        "WHERE o.status = ? GROUP BY o.id "
+        "ORDER BY o.created_at DESC",
         conn,
         params=(status_value,),
     )
@@ -537,7 +540,10 @@ with tab_open:
 
     for _, order in orders_df.iterrows():
         oid = int(order["id"])
-        with st.expander(order["table_name"]):
+        header = order["table_name"]
+        if order["total"] > 0:
+            header += f" · {order['total']:.2f} €"
+        with st.expander(header):
             details_key = f"show_details_{oid}"
             if details_key not in st.session_state:
                 st.session_state[details_key] = False
