@@ -288,10 +288,12 @@ def add_to_cart(item_name: str, price: float, note: str = "") -> None:
     for line in st.session_state.cart:
         if line["item_name"] == item_name and line.get("note", "") == note:
             line["quantity"] += 1
+            st.toast(f"{item_name} — {line['quantity']} шт.", icon="✅")
             return
     st.session_state.cart.append(
         {"item_name": item_name, "price": price, "quantity": 1, "note": note}
     )
+    st.toast(f"Добавлено: {item_name}", icon="✅")
 
 
 init_db()
@@ -390,7 +392,6 @@ with tab_new:
                             "Melange" if ti["category"] == "Frühstück" else ""
                         )
                         add_to_cart(ti["item_name"], float(ti["price"]), quick_note)
-                        st.rerun()
 
         search_query = st.text_input(
             "🔍 Поиск", placeholder="начни печатать название...", key="item_search"
@@ -543,7 +544,7 @@ with tab_open:
         header = order["table_name"]
         if order["total"] > 0:
             header += f" · {order['total']:.2f} €"
-        with st.expander(header):
+        with st.expander(header, key=f"order_exp_{oid}"):
             details_key = f"show_details_{oid}"
             if details_key not in st.session_state:
                 st.session_state[details_key] = False
