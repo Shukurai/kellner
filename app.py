@@ -98,6 +98,12 @@ def init_db():
         )
         conn.commit()
 
+    # правка неверной цены из старого сида (10.20 -> 10.90)
+    conn.execute(
+        "UPDATE menu SET price = 10.90 WHERE name = 'Golubzi' AND price = 10.20"
+    )
+    conn.commit()
+
     if conn.execute("SELECT COUNT(*) FROM menu").fetchone()[0] == 0:
         seed = [
             # Frühstück
@@ -168,7 +174,7 @@ def init_db():
             ("Jarkoe", 10.90, "Hauptspeise Fleisch"),
             ("Wiener Schnitzel (Huhn)", 10.90, "Hauptspeise Fleisch"),
             ("Plow", 10.90, "Hauptspeise Fleisch"),
-            ("Golubzi", 10.20, "Hauptspeise Fleisch"),
+            ("Golubzi", 10.90, "Hauptspeise Fleisch"),
             ("Cevapcici", 10.20, "Hauptspeise Fleisch"),
             ("Chicken Wings", 10.20, "Hauptspeise Fleisch"),
             ("Chicken Nuggets", 10.20, "Hauptspeise Fleisch"),
@@ -276,6 +282,18 @@ def init_db():
     conn.close()
 
 
+def add_to_cart(item_name: str, price: float, note: str = "") -> None:
+    """Добавляет позицию в корзину; если такая же (с тем же уточнением)
+    уже есть — просто увеличивает количество вместо новой строки."""
+    for line in st.session_state.cart:
+        if line["item_name"] == item_name and line.get("note", "") == note:
+            line["quantity"] += 1
+            return
+    st.session_state.cart.append(
+        {"item_name": item_name, "price": price, "quantity": 1, "note": note}
+    )
+
+
 init_db()
 os.makedirs(IMAGES_DIR, exist_ok=True)
 st.set_page_config(page_title="Официант", layout="wide")
@@ -371,14 +389,7 @@ with tab_new:
                         quick_note = (
                             "Melange" if ti["category"] == "Frühstück" else ""
                         )
-                        st.session_state.cart.append(
-                            {
-                                "item_name": ti["item_name"],
-                                "price": float(ti["price"]),
-                                "quantity": 1,
-                                "note": quick_note,
-                            }
-                        )
+                        add_to_cart(ti["item_name"], float(ti["price"]), quick_note)
                         st.rerun()
 
         search_query = st.text_input(
@@ -412,16 +423,17 @@ with tab_new:
                 ["Melange", "Verlängerter", "Espresso", "Tee", "Heiße Schokolade"],
                 key="breakfast_drink",
             )
-        extra_note = st.text_input(
-            "Уточнение (необязательно) — напр. без сахара, отдельно", key="extra_note"
-        )
+        with st.expander("💬 Уточнение (необязательно)"):
+            extra_note = st.text_input(
+                "напр. без сахара, отдельно",
+                key="extra_note",
+                label_visibility="collapsed",
+            )
         if extra_note:
             note = f"{note}, {extra_note}" if note else extra_note
 
         if add_clicked:
-            st.session_state.cart.append(
-                {"item_name": item, "price": price, "quantity": 1, "note": note}
-            )
+            add_to_cart(item, price, note)
 
         if item_row["image_path"] and os.path.exists(item_row["image_path"]):
             st.image(item_row["image_path"], width=200, caption=item)
@@ -465,16 +477,27 @@ with tab_new:
                     f"(уже было {existing_total:.2f} €)"
                 )
 
+            submit_label = (
+                "➕ Добавить к заказу" if existing_total > 0 else "✅ Оформить заказ"
+            )
             col_a, col_b = st.columns(2)
             with col_a:
-                if st.button("✅ Оформить заказ", type="primary"):
-                    cur = conn.cursor()
-                    cur.execute(
-                        "INSERT INTO orders (table_name) VALUES (?)", (table_name,)
-                    )
-                    order_id = cur.lastrowid
-                    for row in st.session_state.cart:
+                if st.button(submit_label, type="primary"):
+                    existing = conn.execute(
+                        "SELECT id FROM orders WHERE table_name = ? "
+                        "AND status = 'открыт'",
+                        (table_name,),
+                    ).fetchone()
+                    if existing:
+                        order_id = existing[0]
+                    else:
+                        cur = conn.cursor()
                         cur.execute(
+                            "INSERT INTO orders (table_name) VALUES (?)", (table_name,)
+                        )
+                        order_id = cur.lastrowid
+                    for row in st.session_state.cart:
+                        conn.execute(
                             "INSERT INTO order_items "
                             "(order_id, item_name, price, quantity, note) "
                             "VALUES (?, ?, ?, ?, ?)",
@@ -488,7 +511,7 @@ with tab_new:
                         )
                     conn.commit()
                     st.session_state.cart = []
-                    st.success(f"Заказ №{order_id} для столика «{table_name}» создан")
+                    st.success(f"Добавлено к столику «{table_name}»")
                     st.rerun()
             with col_b:
                 if st.button("🗑 Очистить"):
@@ -499,7 +522,6 @@ with tab_new:
 # ---------- Заказы ----------
 with tab_open:
     conn = get_conn()
-    menu_df = pd.read_sql("SELECT * FROM menu ORDER BY category, name", conn)
 
     status_choice = st.radio("Статус", ["Открытые", "Оплаченные"], horizontal=True)
     status_value = "открыт" if status_choice == "Открытые" else "оплачен"
@@ -579,45 +601,10 @@ with tab_open:
                         st.rerun()
                     total += it["price"] * it["quantity"]
                 st.write(f"**Итого: {total:.2f} €**")
-
-                with st.expander("➕ Добавить позицию в этот заказ"):
-                    add_q = st.text_input("Поиск", key=f"add_search_{oid}")
-                    add_matches = menu_df
-                    if add_q:
-                        add_matches = search_menu(add_q, menu_df)
-                        if add_matches.empty:
-                            add_matches = menu_df
-                    add_item = st.selectbox(
-                        "Блюдо", add_matches["name"].sort_values(), key=f"add_item_{oid}"
-                    )
-                    add_row = menu_df[menu_df["name"] == add_item].iloc[0]
-                    if add_row["custom_price"]:
-                        add_price = st.number_input(
-                            "Цена, €", min_value=0.0, step=0.5,
-                            value=float(add_row["price"]), key=f"add_price_{oid}",
-                        )
-                    else:
-                        add_price = float(add_row["price"])
-                        st.write(f"{add_price:.2f} €")
-                    add_qty = st.number_input(
-                        "Кол-во", min_value=1, step=1, value=1, key=f"add_qty_{oid}"
-                    )
-                    add_note = st.text_input("Уточнение", key=f"add_note_{oid}")
-                    if st.button("Добавить в заказ", key=f"add_btn_{oid}"):
-                        conn.execute(
-                            "INSERT INTO order_items "
-                            "(order_id, item_name, price, quantity, note) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            (
-                                oid,
-                                add_item,
-                                add_price,
-                                add_qty,
-                                add_note or None,
-                            ),
-                        )
-                        conn.commit()
-                        st.rerun()
+                st.caption(
+                    "Чтобы добавить ещё блюдо — выбери этот столик на вкладке "
+                    "«Новый заказ»"
+                )
 
                 col_a, col_b = st.columns(2)
                 with col_a:
