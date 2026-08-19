@@ -288,12 +288,12 @@ def add_to_cart(item_name: str, price: float, note: str = "") -> None:
     for line in st.session_state.cart:
         if line["item_name"] == item_name and line.get("note", "") == note:
             line["quantity"] += 1
-            st.toast(f"{item_name} — {line['quantity']} шт.", icon="✅")
+            st.toast(f"{item_name} — {line['quantity']} шт.", icon="✅", duration=1)
             return
     st.session_state.cart.append(
         {"item_name": item_name, "price": price, "quantity": 1, "note": note}
     )
-    st.toast(f"Добавлено: {item_name}", icon="✅")
+    st.toast(f"Добавлено: {item_name}", icon="✅", duration=1)
 
 
 init_db()
